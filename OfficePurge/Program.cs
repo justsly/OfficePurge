@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using OpenMcdf;
@@ -13,6 +13,10 @@ namespace OfficePurge
 		private static string filename = "";
 		private static string module = "";
 		private static bool list_modules = false;
+		private static string targetOfficeVersion = "";
+		private static string searchText = "";
+		private static string replaceText = "";
+		private static int fuzz = 0;
 
 		public static void PrintHelp()
 		{
@@ -33,7 +37,7 @@ namespace OfficePurge
 				if (argDict.ContainsKey("d"))
 				{
 					document = argDict["d"];
-					if (document != "word" && document != "excel" && document != "publisher")
+					if (document != "word" && document != "excel" && document != "publisher" && document != "bin")
 					{
 						Console.WriteLine("\n[!] Unknown document type. Options are 'word', 'excel', or 'publisher'.\n");
 						return;
@@ -53,6 +57,32 @@ namespace OfficePurge
 				{
 					Console.WriteLine("\n[!] Missing file (-f)\n");
 					return;
+				}
+
+				if (argDict.ContainsKey("fuzz"))
+				{
+					fuzz = Convert.ToInt32(argDict["fuzz"]);
+				}
+
+				if (argDict.ContainsKey("st"))
+				{
+					searchText = argDict["st"];
+
+					if (argDict.ContainsKey("rt"))
+					{
+						replaceText = argDict["rt"];
+					}
+					else
+                    {
+						Console.WriteLine("\n[!] Missing replace Text (r)\n");
+						return;
+					}
+				}
+
+
+				if (argDict.ContainsKey("t"))
+				{
+					targetOfficeVersion = argDict["t"];
 				}
 
 				if (args.Contains("-l"))
@@ -107,6 +137,7 @@ namespace OfficePurge
 
 					// Grab data from "dir" module stream. Used to retrieve list of module streams in document.
 					byte[] dirStream = Utils.Decompress(commonStorage.GetStorage("VBA").GetStream("dir").GetData());
+					byte[] vbaProjectStream = commonStorage.GetStorage("VBA").GetStream("_VBA_PROJECT").GetData();
 					List<Utils.ModuleInformation> vbaModules = Utils.ParseModulesFromDirStream(dirStream);
 
 					// Only list module streams in document and return
@@ -134,10 +165,27 @@ namespace OfficePurge
 
 							// Get the CompressedSourceCode from module   
 							streamBytes = commonStorage.GetStorage("VBA").GetStream(vbaModule.moduleName).GetData();
-							string OG_VBACode = Utils.GetVBATextFromModuleStream(streamBytes, vbaModule.textOffset);
+							//Console.WriteLine("Hex dump of VBA module stream " + vbaModule.moduleName + ":\n" + Utils.HexDump(streamBytes));
+							//string OG_VBACode = Utils.GetVBATextFromModuleStream(streamBytes, vbaModule.textOffset);
+							//Console.WriteLine("\n[*] OG_VBACode: " + (string)OG_VBACode);
+							//string OG_pCode = Utils.GetPcodeFromModuleStream(streamBytes, vbaModule.textOffset);
+							//var hexString = BitConverter.ToString(OG_pCode);
+							//Console.WriteLine("\n[*] OG_pCode: " + OG_pCode.Replace("2019 safe", "nono safe"));
+							//string old_string = "harmless and safe!";
+							//string new_string = "harmful! not safe!";
+							if(searchText != "" && replaceText != "")
+                            {
+								streamBytes = Utils.PoC(streamBytes, searchText, replaceText);
+								Console.WriteLine("Hex dump of VBA module stream2 " + vbaModule.moduleName + ":\n" + Utils.HexDump(streamBytes));
+							}
+							
 
 							// Remove P-code from module stream and set the module to only have the CompressedSourceCode
+							/*byte[] pCodeBytes = Utils.SetPcodeFromModuleStream(streamBytes, vbaModule.textOffset, OG_pCode);
 							streamBytes = Utils.RemovePcodeInModuleStream(streamBytes, vbaModule.textOffset, OG_VBACode);
+							byte[] rv = new byte[pCodeBytes.Length + streamBytes.Length];
+							System.Buffer.BlockCopy(pCodeBytes, 0, rv, 0, pCodeBytes.Length);
+							System.Buffer.BlockCopy(streamBytes, 0, rv, pCodeBytes.Length, streamBytes.Length);*/
 							commonStorage.GetStorage("VBA").GetStream(vbaModule.moduleName).SetData(streamBytes);
 							module_found = true;
 
@@ -154,19 +202,38 @@ namespace OfficePurge
 						return;
 					}
 
+					Utils.ReadOfficeVersionInVBAProject(vbaProjectStream);
+
+					if (targetOfficeVersion != "")
+					{
+						Utils.ReplaceOfficeVersionInVBAProject(vbaProjectStream, targetOfficeVersion, fuzz);
+						commonStorage.GetStorage("VBA").GetStream("_VBA_PROJECT").SetData(vbaProjectStream);
+					}
 
 					// Change offset to 0 so that document can find compressed source code.
 					commonStorage.GetStorage("VBA").GetStream("dir").SetData(Utils.Compress(Utils.ChangeOffset(dirStream)));
-					Console.WriteLine("\n[*] Module offset changed to 0.");
+					//Console.WriteLine("\n[*] Module offset changed to 0.");
 
 					// Remove performance cache in _VBA_PROJECT stream. Replace the entire stream with _VBA_PROJECT header.
-					byte[] data = Utils.HexToByte("CC-61-FF-FF-00-00-00");
-					commonStorage.GetStorage("VBA").GetStream("_VBA_PROJECT").SetData(data);
-					Console.WriteLine("\n[*] PerformanceCache removed from _VBA_PROJECT stream.");
+					//byte[] data = Utils.HexToByte("CC-61-FF-FF-00-00-00");
+					//commonStorage.GetStorage("VBA").GetStream("_VBA_PROJECT").SetData(data);
+					//Console.WriteLine("\n[*] PerformanceCache removed from _VBA_PROJECT stream.");
 
 					// Check if document contains SRPs. Must be removed for VBA Purging to work.
 					try
 					{
+						byte[] srp0 = commonStorage.GetStorage("VBA").GetStream("__SRP_0").GetData();
+						//Console.WriteLine("Hex dump of VBA module stream __SRP_0 :\n" + Utils.HexDump(srp0));
+						//srp0 = Utils.PoC2(srp0);
+						//commonStorage.GetStorage("VBA").GetStream("__SRP_0").SetData(srp0);
+						//Console.WriteLine("Hex dump of VBA modified __SRP_0 :\n" + Utils.HexDump(srp0));
+						byte[] srp1 = commonStorage.GetStorage("VBA").GetStream("__SRP_1").GetData();
+						//Console.WriteLine("Hex dump of VBA module stream __SRP_1 :\n" + Utils.HexDump(srp1));
+						byte[] srp2 = commonStorage.GetStorage("VBA").GetStream("__SRP_2").GetData();
+						//Console.WriteLine("Hex dump of VBA module stream __SRP_2 :\n" + Utils.HexDump(srp2));
+						byte[] srp3 = commonStorage.GetStorage("VBA").GetStream("__SRP_3").GetData();
+						//Console.WriteLine("Hex dump of VBA module stream __SRP_3 :\n" + Utils.HexDump(srp3));
+						
 						commonStorage.GetStorage("VBA").Delete("__SRP_0");
 						commonStorage.GetStorage("VBA").Delete("__SRP_1");
 						commonStorage.GetStorage("VBA").Delete("__SRP_2");
